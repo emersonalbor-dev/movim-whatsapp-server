@@ -1,3 +1,6 @@
+// Node 20 needs 'ws' for Supabase WebSocket support
+global.WebSocket = require('ws')
+
 const { Client, RemoteAuth } = require('whatsapp-web.js')
 const { SupabaseStore } = require('wwebjs-supabase')
 const { createClient } = require('@supabase/supabase-js')
