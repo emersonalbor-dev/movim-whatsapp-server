@@ -1,14 +1,10 @@
 FROM node:20-slim
 
-# Install Chromium dependencies
+# No Chromium needed — Baileys is pure Node.js
 RUN apt-get update && apt-get install -y \
-  chromium \
-  fonts-freefont-ttf \
+  ca-certificates \
   --no-install-recommends && \
   rm -rf /var/lib/apt/lists/*
-
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -17,7 +13,6 @@ RUN npm install --omit=dev
 
 COPY server.js ./
 
-# Persistent session storage
 VOLUME ["/data"]
 
 EXPOSE 3000
