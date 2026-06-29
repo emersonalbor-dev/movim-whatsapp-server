@@ -1,9 +1,4 @@
-// Node 20 needs 'ws' for Supabase WebSocket support
-global.WebSocket = require('ws')
-
-const { Client, RemoteAuth } = require('whatsapp-web.js')
-const { SupabaseStore } = require('wwebjs-supabase')
-const { createClient } = require('@supabase/supabase-js')
+const { Client, LocalAuth } = require('whatsapp-web.js')
 const qrcode = require('qrcode-terminal')
 const qrcodeLib = require('qrcode')
 const express = require('express')
@@ -11,8 +6,6 @@ const express = require('express')
 const API_KEY = process.env.API_KEY || 'movim-secret-2024'
 const PORT = process.env.PORT || 3000
 const SESSION = process.env.SESSION_ID || 'movim'
-const SUPABASE_URL = process.env.SUPABASE_URL
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY
 const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL
 
 const app = express()
@@ -29,65 +22,46 @@ app.use((req, res, next) => {
 // ── WhatsApp client ────────────────────────────────────────────────────────
 let clientReady = false
 let lastQR = null
-let client
 
-async function initClient() {
-  let authStrategy
+const client = new Client({
+  authStrategy: new LocalAuth({ clientId: SESSION }),
+  puppeteer: {
+    headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu',
+    ],
+  },
+})
 
-  if (SUPABASE_URL && SUPABASE_KEY) {
-    // Persist session in Supabase so restarts don't require re-scanning QR
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
-    const store = new SupabaseStore({ supabase })
-    authStrategy = new RemoteAuth({ clientId: SESSION, store, backupSyncIntervalMs: 300000 })
-    console.log('✅ Sesión guardada en Supabase (no re-escanear QR al reiniciar)')
-  } else {
-    const { LocalAuth } = require('whatsapp-web.js')
-    authStrategy = new LocalAuth({ clientId: SESSION })
-    console.log('⚠️  Sin Supabase — sesión local (re-escanear QR si se reinicia)')
-  }
+client.on('qr', (qr) => {
+  lastQR = qr
+  clientReady = false
+  console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
+  qrcode.generate(qr, { small: true })
+  if (PUBLIC_URL) console.log(`\nO visita: ${PUBLIC_URL}/qr\n`)
+})
 
-  client = new Client({
-    authStrategy,
-    puppeteer: {
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--disable-gpu',
-      ],
-    },
-  })
+client.on('ready', () => {
+  clientReady = true
+  lastQR = null
+  console.log('✅ WhatsApp conectado y listo!')
+})
 
-  client.on('qr', (qr) => {
-    lastQR = qr
-    clientReady = false
-    console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
-    qrcode.generate(qr, { small: true })
-    if (PUBLIC_URL) console.log(`\nO visita: ${PUBLIC_URL}/qr\n`)
-  })
+client.on('disconnected', (reason) => {
+  clientReady = false
+  console.log('❌ WhatsApp desconectado:', reason)
+  setTimeout(() => client.initialize(), 8000)
+})
 
-  client.on('ready', () => {
-    clientReady = true
-    lastQR = null
-    console.log('✅ WhatsApp conectado y listo!')
-  })
-
-  client.on('disconnected', (reason) => {
-    clientReady = false
-    console.log('❌ WhatsApp desconectado:', reason)
-    setTimeout(() => initClient(), 8000)
-  })
-
-  client.initialize()
-}
-
-initClient()
+client.initialize()
 
 // Self-ping every 10 min to prevent Render free-tier sleep
 if (PUBLIC_URL) {
@@ -95,6 +69,7 @@ if (PUBLIC_URL) {
     const http = PUBLIC_URL.startsWith('https') ? require('https') : require('http')
     http.get(`${PUBLIC_URL}/api/health`, () => {}).on('error', () => {})
   }, 10 * 60 * 1000)
+  console.log('🔁 Self-ping activo — instancia no se dormirá')
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────────
