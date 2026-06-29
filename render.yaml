@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: movim-whatsapp
+    runtime: docker
+    plan: free
+    envVars:
+      - key: API_KEY
+        value: movim-secret-2024
+      - key: SESSION_ID
+        value: movim
+      - key: PORT
+        value: 3000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false

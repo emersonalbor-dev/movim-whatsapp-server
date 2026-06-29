@@ -1,11 +1,16 @@
-const { Client, LocalAuth } = require('whatsapp-web.js')
+const { Client, RemoteAuth } = require('whatsapp-web.js')
+const { SupabaseStore } = require('wwebjs-supabase')
+const { createClient } = require('@supabase/supabase-js')
 const qrcode = require('qrcode-terminal')
 const qrcodeLib = require('qrcode')
 const express = require('express')
 
 const API_KEY = process.env.API_KEY || 'movim-secret-2024'
-const PORT = process.env.PORT || 2785
+const PORT = process.env.PORT || 3000
 const SESSION = process.env.SESSION_ID || 'movim'
+const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY
+const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL
 
 const app = express()
 app.use(express.json())
@@ -21,45 +26,73 @@ app.use((req, res, next) => {
 // ── WhatsApp client ────────────────────────────────────────────────────────
 let clientReady = false
 let lastQR = null
+let client
 
-const client = new Client({
-  authStrategy: new LocalAuth({ clientId: SESSION, dataPath: '/data/.wwebjs_auth' }),
-  puppeteer: {
-    headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-gpu',
-    ],
-  },
-})
+async function initClient() {
+  let authStrategy
 
-client.on('qr', (qr) => {
-  lastQR = qr
-  console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
-  qrcode.generate(qr, { small: true })
-  console.log('\nO visita: /qr en el navegador\n')
-})
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    // Persist session in Supabase so restarts don't require re-scanning QR
+    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+    const store = new SupabaseStore({ supabase })
+    authStrategy = new RemoteAuth({ clientId: SESSION, store, backupSyncIntervalMs: 300000 })
+    console.log('✅ Sesión guardada en Supabase (no re-escanear QR al reiniciar)')
+  } else {
+    const { LocalAuth } = require('whatsapp-web.js')
+    authStrategy = new LocalAuth({ clientId: SESSION })
+    console.log('⚠️  Sin Supabase — sesión local (re-escanear QR si se reinicia)')
+  }
 
-client.on('ready', () => {
-  clientReady = true
-  lastQR = null
-  console.log('✅ WhatsApp conectado y listo!')
-})
+  client = new Client({
+    authStrategy,
+    puppeteer: {
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-gpu',
+      ],
+    },
+  })
 
-client.on('disconnected', (reason) => {
-  clientReady = false
-  console.log('❌ WhatsApp desconectado:', reason)
-  setTimeout(() => client.initialize(), 5000)
-})
+  client.on('qr', (qr) => {
+    lastQR = qr
+    clientReady = false
+    console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
+    qrcode.generate(qr, { small: true })
+    if (PUBLIC_URL) console.log(`\nO visita: ${PUBLIC_URL}/qr\n`)
+  })
 
-client.initialize()
+  client.on('ready', () => {
+    clientReady = true
+    lastQR = null
+    console.log('✅ WhatsApp conectado y listo!')
+  })
+
+  client.on('disconnected', (reason) => {
+    clientReady = false
+    console.log('❌ WhatsApp desconectado:', reason)
+    setTimeout(() => initClient(), 8000)
+  })
+
+  client.initialize()
+}
+
+initClient()
+
+// Self-ping every 10 min to prevent Render free-tier sleep
+if (PUBLIC_URL) {
+  setInterval(() => {
+    const http = PUBLIC_URL.startsWith('https') ? require('https') : require('http')
+    http.get(`${PUBLIC_URL}/api/health`, () => {}).on('error', () => {})
+  }, 10 * 60 * 1000)
+}
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
@@ -76,8 +109,7 @@ app.get('/qr', async (req, res) => {
   }
   if (!lastQR) {
     return res.send(`<html><body style="display:flex;flex-direction:column;align-items:center;font-family:sans-serif;padding:40px">
-      <h2>⏳ Generando QR...</h2>
-      <p>Espera unos segundos y recarga.</p>
+      <h2>⏳ Generando QR...</h2><p>Espera unos segundos y recarga.</p>
       <script>setTimeout(()=>location.reload(),4000)</script>
     </body></html>`)
   }
@@ -89,7 +121,6 @@ app.get('/qr', async (req, res) => {
       <p style="color:#666;margin-top:16px;text-align:center">
         Abre WhatsApp → ⋮ → <strong>Dispositivos vinculados</strong> → <strong>Vincular dispositivo</strong>
       </p>
-      <p style="color:#999;font-size:12px">Esta página se actualiza cada 30 segundos</p>
       <script>setTimeout(()=>location.reload(),30000)</script>
     </body></html>`)
   } catch {
@@ -97,9 +128,8 @@ app.get('/qr', async (req, res) => {
   }
 })
 
-// Send text — compatible with rmyndharis/OpenWA REST API
 app.post('/api/sessions/:sessionId/messages/send-text', async (req, res) => {
-  if (!clientReady) return res.status(503).json({ error: 'WhatsApp no conectado. Escanea el QR primero.' })
+  if (!clientReady) return res.status(503).json({ error: 'WhatsApp no conectado. Visita /qr para escanear.' })
   const { chatId, text } = req.body
   if (!chatId || !text) return res.status(400).json({ error: 'chatId y text son requeridos' })
   try {
@@ -115,9 +145,8 @@ app.get('/api/sessions', (req, res) => {
   res.json([{ id: SESSION, status: clientReady ? 'CONNECTED' : 'INITIALIZING' }])
 })
 
-// ── Start ──────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n🚀 MOVIM WhatsApp Server en puerto ${PORT}`)
-  console.log(`   QR page: /qr`)
+  if (PUBLIC_URL) console.log(`   URL pública: ${PUBLIC_URL}`)
   console.log('   Inicializando WhatsApp...\n')
 })
