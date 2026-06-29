@@ -126,6 +126,17 @@ app.get('/qr', async (req, res) => {
   }
 })
 
+// Check if a phone number exists on WhatsApp and get correct JID
+app.get('/api/check/:phone', async (req, res) => {
+  if (!clientReady || !sock) return res.status(503).json({ error: 'Not connected' })
+  try {
+    const results = await sock.onWhatsApp(req.params.phone)
+    res.json(results)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.post('/api/sessions/:sessionId/messages/send-text', async (req, res) => {
   if (!clientReady || !sock) return res.status(503).json({ error: 'WhatsApp no conectado. Visita /qr.' })
   const { chatId, text } = req.body
